@@ -47,7 +47,7 @@ class NavigationUI(QMainWindow):
         self.straight_fuel_cost.raise_()
         self.straight_fuel_cost.setStyleSheet("background-color: rgba(255, 255, 255, 150);")
 
-        # A-star 경로로
+        # A-star 경로
         self.astar_figure = Figure()
         self.astar_canvas = FigureCanvas(self.astar_figure)
         astar_layout = QVBoxLayout(self.astar_canvas_widget)
@@ -63,7 +63,7 @@ class NavigationUI(QMainWindow):
         state_dim = 55
         action_dim = 5
         self.agent = DQNAgent(state_dim, action_dim)
-        model_path = r"C:\baramproject\trained_model\maritime_dqn_3\navigation_model.pth"
+        model_path = r"C:\baramproject\trained_model\maritime_dqn_4\navigation_model.pth"
         if not os.path.exists(model_path):
             self.maritime_dqn_fuel_cost.setPlainText("Model not found!")
             return
@@ -123,63 +123,46 @@ class NavigationUI(QMainWindow):
             self.maritime_dqn_fuel_cost.setPlainText("Invalid date!")
             return
 
-        # DQN 경로 탐색
+        # 시작점과 종료점 설정
         self.env.start_pos = self.env.latlon_to_grid(start_lat, start_lon)
         self.env.end_pos = self.env.latlon_to_grid(end_lat, end_lon)
+
+        # DQN 경로 탐색
         state = self.env.reset(start_time=start_time)
         path = [self.env.current_pos]
         done = False
-        total_fuel = 0.0
         step = 0
-        debug_data = []
         while not done and step < self.env.max_steps:
             action = self.agent.select_action(state, epsilon=0.0)
             next_state, reward, done, _ = self.env.step(action)
-            q_values = self.agent.policy_net(torch.FloatTensor(state).unsqueeze(0).to(self.device)).detach().cpu().numpy().flatten()
-            debug_data.append({
-                "step": step,
-                "state": state.tolist(),
-                "action": action,
-                "reward": reward,
-                "next_state": next_state.tolist(),
-                "q_values": q_values.tolist(),
-                "epsilon": 0.0
-            })
             path.append(self.env.current_pos)
-            abs_action_angle = (self.env.action_space[action] + self.env.get_relative_position_and_angle()[2]) % 360.0
-            fuel = calculate_fuel_consumption(
-                abs_action_angle, self.env.current_pos, self.env.tidal_grid_dir,
-                self.env.tidal_grid_speed, self.env.tidal_grid_valid,
-                self.env.wind_grid_dir, self.env.wind_grid_speed, self.env.wind_grid_valid,
-                self.env.n_rows, self.env.n_cols, self.env.f_0, self.env.V_s
-            )
-            total_fuel += fuel
             state = next_state
             step += 1
-            # 경로 그리기 ,10 스텝마다 UI 반영
             if step % 10 == 0:
                 self.plot_path(self.dqn_ax, self.dqn_canvas, self.env.grid, path, 
-                               self.env.start_pos, self.env.end_pos)
+                            self.env.start_pos, self.env.end_pos)
                 QApplication.processEvents()
-        # 최종 경로
         self.plot_path(self.dqn_ax, self.dqn_canvas, self.env.grid, path, 
-                       self.env.start_pos, self.env.end_pos)
-        self.maritime_dqn_fuel_cost.setPlainText(f"DQN Fuel Cost: {total_fuel:.2f}")
+                    self.env.start_pos, self.env.end_pos)
+        dqn_fuel = self.env.calculate_path_fuel(path, start_time)
+        self.maritime_dqn_fuel_cost.setPlainText(f"DQN Fuel Cost: {dqn_fuel:.2f}")
 
         # 직선 경로 탐색
-        straight_path, straight_fuel = self.env.calculate_straight_path(start_time=start_time)
+        straight_path, _ = self.env.calculate_straight_path(start_time=start_time)
         self.plot_path(self.straight_ax, self.straight_canvas, self.env.grid, straight_path, 
-                       self.env.start_pos, self.env.end_pos)
+                    self.env.start_pos, self.env.end_pos)
+        straight_fuel = self.env.calculate_path_fuel(straight_path, start_time)
         self.straight_fuel_cost.setPlainText(f"Straight Fuel Cost: {straight_fuel:.2f}")
 
-        # A* 경로 탐색(미구현)
-        self.astar_fuel_cost.setPlainText("A* Fuel Cost: Not Implemented")
-
-        # 디버깅 데이터
-        data_dir = r"C:/baramproject/trained_model/maritime_dqn_1/python_test_data"
-        os.makedirs(data_dir, exist_ok=True)
-        with open(os.path.join(data_dir, "final_route.json"), 'w') as f:
-            json.dump(debug_data, f, indent=4)
+        # A* 경로 탐색
+        astar_path, _ = self.env.calculate_astar_path(start_time=start_time)
+        if astar_path:
+            self.plot_path(self.astar_ax, self.astar_canvas, self.env.grid, astar_path, 
+                        self.env.start_pos, self.env.end_pos)
+            astar_fuel = self.env.calculate_path_fuel(astar_path, start_time)
+            self.astar_fuel_cost.setPlainText(f"A* Fuel Cost: {astar_fuel:.2f}")
+        else:
+            self.astar_fuel_cost.setPlainText("A* Path Not Found")
 
     def reset(self):
         self.comboBox.setCurrentText("2018")
