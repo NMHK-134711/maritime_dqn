@@ -1,3 +1,4 @@
+import heapq
 import numpy as np
 from datetime import datetime, timedelta
 import os
@@ -139,6 +140,88 @@ class NavigationEnv:
             self.wind_grid_speed = np.zeros((self.n_rows, self.n_cols), dtype=np.float64)
             self.wind_grid_valid = np.zeros((self.n_rows, self.n_cols), dtype=np.bool_)
 
+    def get_neighbors(self, pos):
+        """유효한 인접 위치(8방향)를 반환합니다."""
+        neighbors = []
+        for dr, dc in self.grid_directions:
+            r, c = pos[0] + dr, pos[1] + dc
+            if 0 <= r < self.n_rows and 0 <= c < self.n_cols and self.grid[r, c] == 0:
+                neighbors.append((r, c))
+        return neighbors
+
+    def calculate_total_fuel(self, path):
+        """경로를 따라 총 연료 소모량을 계산합니다."""
+        total_fuel = 0.0
+        for i in range(len(path) - 1):
+            current_pos = path[i]
+            next_pos = path[i + 1]
+            direction = (next_pos[0] - current_pos[0], next_pos[1] - current_pos[1])
+            dir_index = self.grid_directions.index(direction)
+            abs_action_angle = self.grid_angles[dir_index]
+            fuel = calculate_fuel_consumption(
+                abs_action_angle, current_pos, self.tidal_grid_dir, self.tidal_grid_speed,
+                self.tidal_grid_valid, self.wind_grid_dir, self.wind_grid_speed,
+                self.wind_grid_valid, self.n_rows, self.n_cols, self.f_0, self.V_s
+            )
+            total_fuel += fuel
+        return total_fuel
+
+    def calculate_astar_path(self, start_time=None):
+        if start_time is None:
+            start_date = datetime(2018, 1, 1, 0, 0)
+            end_date = datetime(2018, 12, 29, 0, 0)
+            time_delta = (end_date - start_date).total_seconds()
+            random_seconds = np.random.randint(0, int(time_delta / 60 / 30) + 1) * 30 * 60
+            start_time = start_date + timedelta(seconds=random_seconds)
+        
+        # A* 데이터 구조 초기화
+        open_set = []  # 우선순위 큐: (f, g, pos, parent)
+        open_dict = {}  # 빠른 조회: pos -> (g, parent)
+        closed_set = set()  # 방문한 노드
+        
+        # 시작 노드
+        start_h = calculate_distance(self.start_pos, self.end_pos)
+        heapq.heappush(open_set, (start_h, 0, self.start_pos, None))
+        open_dict[self.start_pos] = (0, None)
+        
+        while open_set:
+            # f 값이 가장 작은 노드 선택
+            f, g, current_pos, parent = heapq.heappop(open_set)
+            if current_pos == self.end_pos:
+                # 경로 재구성
+                path = []
+                pos = current_pos
+                while pos is not None:
+                    path.append(pos)
+                    pos = open_dict[pos][1] if pos in open_dict else None
+                path = path[::-1]  # 시작점에서 끝점 순으로
+                total_distance = g  # g는 총 이동 거리
+                return path, total_distance
+            
+            if current_pos in closed_set:
+                continue
+            
+            closed_set.add(current_pos)
+            
+            # 이웃 탐색
+            for neighbor in self.get_neighbors(current_pos):
+                if neighbor in closed_set:
+                    continue
+                
+                # 이동 거리 계산 (직선: 1, 대각선: sqrt(2))
+                dr = abs(neighbor[0] - current_pos[0])
+                dc = abs(neighbor[1] - current_pos[1])
+                move_cost = 1.4142135623730951 if dr == 1 and dc == 1 else 1.0  # sqrt(2) for diagonal
+                
+                tentative_g = g + move_cost
+                h = calculate_distance(neighbor, self.end_pos)
+                f = tentative_g + h
+                
+                if neighbor not in open_dict or tentative_g < open_dict[neighbor][0]:
+                    open_dict[neighbor] = (tentative_g, current_pos)
+                    heapq.heappush(open_set, (f, tentative_g, neighbor, current_pos))
+        
+        return None, None
     def step(self, action):
         self.step_count += 1
         rel_pos, distance, end_angle = self.get_relative_position_and_angle()
@@ -203,8 +286,8 @@ class NavigationEnv:
         self.prev_distance = current_distance
         goal_reward = 10000.0 if current_distance <= 1.0 else 0.0
         
-        fuel_penalty = -current_fuel * 0.05
-        reward = (fuel_penalty * 0.7 + distance_reward * 2.0 - turn_penalty * 1.9 + goal_reward + visit_penalty) * 0.0001
+        fuel_penalty = -current_fuel * 1.0
+        reward = (fuel_penalty * 1.00 + distance_reward * 1.0 - turn_penalty * 1.0 + goal_reward + visit_penalty) * 0.0001
         
         if not moved:
             reward -= 2.0
@@ -245,8 +328,6 @@ class NavigationEnv:
         return np.array(state, dtype=np.float64)
     
     def calculate_straight_path(self, start_time=None):
-        """시작점에서 종료점까지 직선 경로를 계산하고 연료 소모량을 반환"""
-        # 시작 시간 설정 (reset과 동일한 로직 사용)
         start_date = datetime(2018, 1, 1, 0, 0)
         end_date = datetime(2018, 12, 29, 0, 0)
         if start_time is None:
@@ -254,7 +335,6 @@ class NavigationEnv:
             random_seconds = np.random.randint(0, int(time_delta / 60 / 30) + 1) * 30 * 60
             start_time = start_date + timedelta(seconds=random_seconds)
 
-        # 환경 초기화
         self.current_pos = self.start_pos
         self.current_time = start_time
         self.cumulative_time = 0
@@ -266,77 +346,83 @@ class NavigationEnv:
         self.map_wind_to_grid()
         self.path = [self.current_pos]
 
-        # 직선 경로 계산
         path = []
         current_pos = np.array(self.start_pos, dtype=np.float64)
         end_pos = np.array(self.end_pos, dtype=np.float64)
         direction = end_pos - current_pos
         distance = np.linalg.norm(direction)
         if distance == 0:
-            return self.path, 0.0  # 시작점과 종료점이 동일하면 종료
+            return self.path, 0.0
 
-        direction = direction / distance  # 단위 벡터
-        total_fuel = 0.0
-        max_steps = int(distance) + 1  # 최대 스텝 수
+        direction = direction / distance
+        total_distance = 0.0
+        max_steps = int(distance) + 1
         step_count = 0
 
         while step_count < max_steps:
-            # 현재 위치에서 다음 위치 계산
             next_pos = current_pos + direction
             next_pos_int = (int(round(next_pos[0])), int(round(next_pos[1])))
-
-            # 경계 체크
             if not (0 <= next_pos_int[0] < self.n_rows and 0 <= next_pos_int[1] < self.n_cols):
                 break
-
-            # 육지 체크
             if self.grid[next_pos_int[0], next_pos_int[1]] == 1:
                 break
-
-            # 현재 위치 업데이트
             current_pos = next_pos
             self.current_pos = next_pos_int
             path.append(self.current_pos)
-
-            # 방향 계산 (get_relative_position_and_angle 활용)
-            _, _, abs_action_angle = self.get_relative_position_and_angle()
-
-            # 연료 소모량 계산
-            fuel = calculate_fuel_consumption(
-                abs_action_angle, self.current_pos, self.tidal_grid_dir,
-                self.tidal_grid_speed, self.tidal_grid_valid,
-                self.tidal_grid_dir, self.tidal_grid_speed, self.tidal_grid_valid,
-                self.n_rows, self.n_cols, self.f_0, self.V_s
-            )
-            total_fuel += fuel
-
-            # 시간 업데이트 (DQN step과 동일)
-            self.cumulative_time += self.step_time_minutes
-            if self.cumulative_time >= 30:
-                next_time = self.current_time + timedelta(minutes=30)
-                end_date = datetime(2018, 12, 31, 23, 30)
-                if next_time <= end_date:
-                    self.current_time = next_time
-                    self.get_tidal_data()
-                    if self.tidal_data is None:
-                        print(f"No tidal data for {self.current_time}. Terminating straight path.")
-                        break
-                    self.map_tidal_to_grid()
-                    self.get_wind_data()
-                    if self.wind_data is None:
-                        print(f"No wind data for {self.current_time}. Terminating straight path.")
-                        break
-                    self.map_wind_to_grid()
-                else:
-                    print("Warning: Time exceeds 2018 range. Terminating straight path.")
-                    break
-                self.cumulative_time -= 30
-
+            total_distance += 1.0 if step_count > 0 else 0.0
             step_count += 1
-
-            # 종료 조건
             if np.linalg.norm(np.array(self.current_pos) - end_pos) <= 1.0:
                 break
 
         self.path = path
-        return path, total_fuel
+        return path, total_distance
+    
+    def calculate_path_fuel(self, path, start_time):
+        if not path or len(path) < 2:
+            return 0.0
+        
+        total_fuel = 0.0
+        current_time = start_time
+        cumulative_time = 0.0
+        
+        # 초기 환경 데이터 설정
+        self.current_time = start_time
+        self.get_tidal_data()
+        self.map_tidal_to_grid()
+        self.get_wind_data()
+        self.map_wind_to_grid()
+
+        for i in range(len(path) - 1):
+            current_pos = path[i]
+            next_pos = path[i + 1]
+            direction = (next_pos[0] - current_pos[0], next_pos[1] - current_pos[1])
+            dir_index = self.grid_directions.index(direction)
+            abs_action_angle = self.grid_angles[dir_index]
+
+            # 연료 소모량 계산
+            fuel = calculate_fuel_consumption(
+                abs_action_angle, current_pos, self.tidal_grid_dir,
+                self.tidal_grid_speed, self.tidal_grid_valid,
+                self.wind_grid_dir, self.wind_grid_speed, self.wind_grid_valid,
+                self.n_rows, self.n_cols, self.f_0, self.V_s
+            )
+            total_fuel += fuel
+
+            # 시간 업데이트 및 환경 데이터 갱신
+            cumulative_time += self.step_time_minutes
+            if cumulative_time >= 30:
+                next_time = current_time + timedelta(minutes=30)
+                end_date = datetime(2018, 12, 31, 23, 30)
+                if next_time <= end_date:
+                    current_time = next_time
+                    self.current_time = current_time
+                    self.get_tidal_data()
+                    self.map_tidal_to_grid()
+                    self.get_wind_data()
+                    self.map_wind_to_grid()
+                else:
+                    print("Warning: Time exceeds 2018 range.")
+                    break
+                cumulative_time -= 30
+
+        return total_fuel
