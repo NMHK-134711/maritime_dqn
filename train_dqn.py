@@ -9,8 +9,8 @@ def train_dqn(env, agent, max_episodes=1000):
     rewards = []
     path_lengths = []
     epsilon = agent.epsilon_start
-    image_dir = r"C:/baramproject/trained_model/maritime_dqn_1/episode_debug_image"
-    data_dir = r"C:/baramproject/trained_model/maritime_dqn_1/episode_debug_data"
+    image_dir = r"C:/baramproject/trained_model/maritime_dqn_4/episode_debug_image"
+    data_dir = r"C:/baramproject/trained_model/maritime_dqn_4/episode_debug_data"
     os.makedirs(image_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
     
@@ -63,6 +63,6 @@ def train_dqn(env, agent, max_episodes=1000):
             plt.savefig(os.path.join(image_dir, f"episode_{episode}.png"))
             plt.close()
    
-    model_path = r"C:/baramproject/trained_model/maritime_dqn_1/navigation_model.pth"
+    model_path = r"C:/baramproject/trained_model/maritime_dqn_4/navigation_model.pth"
     torch.save(agent.policy_net.state_dict(), model_path)
     return rewards, path_lengths
