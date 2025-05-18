@@ -34,7 +34,9 @@ def calculate_fuel_consumption(abs_action_angle, position, tidal_grid_dir, tidal
 
 @jit(nopython=True)
 def calculate_distance(end_pos, current_pos):
-    rel_pos = end_pos - current_pos
+    end_pos_array = np.array([end_pos[0], end_pos[1]], dtype=np.float64)
+    current_pos_array = np.array([current_pos[0], current_pos[1]], dtype=np.float64)
+    rel_pos = end_pos_array - current_pos_array
     return np.linalg.norm(rel_pos)
 
 @jit(nopython=True)
